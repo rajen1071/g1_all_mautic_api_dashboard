@@ -2109,10 +2109,11 @@ async function refreshFromMautic() {
     if (progressText) progressText.textContent = `${completed} / ${total} reports`;
   }
 
-  // Clear stores that will be repopulated (mirrors old upload-clear behavior)
-  Object.keys(store.simple).forEach(k => store.simple[k] = []);
-  Object.keys(store.campaign).forEach(k => store.campaign[k] = []);
-  store.zoominfo = [];
+  // NOTE: we deliberately do NOT clear store.simple/store.campaign/store.zoominfo
+  // here anymore. Old data stays on screen until each report's NEW data actually
+  // arrives and replaces it — so a slow/failed fetch never blanks the dashboard.
+  // Each report kind below overwrites only its own bucket once its fetch succeeds.
+  const touchedSimpleMultiJtbds = new Set(); // tracks which buckets simple-multi has already reset this run
 
   // Group reports by hostname: same server -> fetched sequentially (with a
   // small delay) to avoid rate-limiting; different servers -> run in parallel,
@@ -2133,28 +2134,35 @@ async function refreshFromMautic() {
       const rawRows = csvText ? parseCSV(csvText) : [];
 
       if (cfg.kind === 'simple') {
-        store.simple[cfg.target] = rawRows.map(normalizeRow);
+        store.simple[cfg.target] = rawRows.map(normalizeRow); // single source per bucket — safe overwrite
 
       } else if (cfg.kind === 'simple-multi') {
         const rows = rawRows.map(normalizeRow);
+        const byJtbd = {};
         rows.forEach(r => {
           const n = r.name.toLowerCase();
           for (const [jtbd, jcfg] of Object.entries(JTBD_CONFIG)) {
             const newKws = jcfg.keywords['new'] || [];
             const ziKws = jcfg.keywords['zoominfo'] || [];
             if (newKws.some(k => n.includes(k)) && !ziKws.some(k => n.includes(k))) {
-              store.simple[jtbd].push(r);
+              (byJtbd[jtbd] = byJtbd[jtbd] || []).push(r);
               break;
             }
           }
         });
+        // Replace (not append) each bucket exactly once with this run's matches —
+        // prevents duplicate rows piling up if you click Refresh multiple times
+        Object.entries(byJtbd).forEach(([jtbd, jRows]) => {
+          store.simple[jtbd] = jRows;
+          touchedSimpleMultiJtbds.add(jtbd);
+        });
 
       } else if (cfg.kind === 'zoominfo') {
-        store.zoominfo = store.zoominfo.concat(rawRows.map(normalizeRow));
+        store.zoominfo = rawRows.map(normalizeRow); // single source — safe overwrite
 
       } else if (cfg.kind === 'campaign') {
         const raw = aggregateRawCampaignRows(rawRows);
-        store.campaign[cfg.target] = store.campaign[cfg.target].concat(raw);
+        store.campaign[cfg.target] = raw; // single source per target — safe overwrite
       }
 
       results.push({ label: cfg.label, ok: true, count: rawRows.length });
@@ -2189,6 +2197,7 @@ async function refreshFromMautic() {
 
   updateBadges();
   refreshAll();
+  saveCacheToLocalStorage(); // persist so a browser refresh doesn't lose the data
 
   const okCount = results.filter(r => r.ok).length;
   const failCount = results.length - okCount;
@@ -2210,10 +2219,52 @@ async function refreshFromMautic() {
   setTimeout(() => { if (overlay) overlay.classList.remove('show'); }, failCount === 0 ? 500 : 1800);
 }
 
+// ─── LOCAL CACHE (so a browser refresh / F5 doesn't lose the dashboard) ───
+const CACHE_KEY = 'mauticDashboardCache_v1';
+
+function saveCacheToLocalStorage() {
+  try {
+    const payload = {
+      simple: store.simple,
+      campaign: store.campaign,
+      zoominfo: store.zoominfo,
+      masterCampaigns: DYNAMIC_MASTER_CAMPAIGNS,
+      savedAt: Date.now()
+    };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.warn('Could not save dashboard cache:', err.message); // e.g. storage quota — non-fatal
+  }
+}
+
+function loadCacheFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return false;
+    const payload = JSON.parse(raw);
+    if (payload.simple) Object.assign(store.simple, payload.simple);
+    if (payload.campaign) Object.assign(store.campaign, payload.campaign);
+    if (Array.isArray(payload.zoominfo)) store.zoominfo = payload.zoominfo;
+    if (payload.masterCampaigns) DYNAMIC_MASTER_CAMPAIGNS = payload.masterCampaigns;
+    updateBadges();
+    refreshAll();
+    const statusEl = document.getElementById('refreshStatus');
+    if (statusEl && payload.savedAt) {
+      statusEl.textContent = `Showing cached data from ${new Date(payload.savedAt).toLocaleString()} — refreshing...`;
+      statusEl.style.color = '#94a3b8';
+    }
+    return true;
+  } catch (err) {
+    console.warn('Could not load dashboard cache:', err.message);
+    return false;
+  }
+}
+
 // INIT
 renderOvSummary(); renderJTBDGrid();
 renderCampTable(currentOvTab,'ov-camp-wrap','uniqueClicks',false);
-refreshFromMautic(); // auto-load live data on page open
+loadCacheFromLocalStorage(); // show last-known data instantly (if any) so the screen is never blank
+refreshFromMautic();         // then fetch fresh live data from Mautic in the background
 </script>
 </body>
 </html>
