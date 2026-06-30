@@ -2166,6 +2166,11 @@ async function refreshFromMautic() {
       }
 
       results.push({ label: cfg.label, ok: true, count: rawRows.length });
+      // Progressive render: show this report's data on screen immediately
+      // instead of waiting for all 11 to finish — feels much faster, and the
+      // user can see real numbers appearing section by section.
+      updateBadges();
+      refreshAll();
       markItem(cfg.key, 'done');
     } catch (err) {
       console.error(`${cfg.label} fetch error:`, err);
@@ -2183,12 +2188,27 @@ async function refreshFromMautic() {
     }
   }
 
-  // Across domains: run all report groups in parallel, AND fetch the fresh
-  // dynamic campaign master-lists (for zero-activity topics) at the same time.
-  await Promise.all([
-    ...Object.values(groups).map(cfgs => runGroupSequential(cfgs)),
-    refreshMasterCampaignLists()
-  ]);
+  // Across domains: run all report groups in parallel. The campaign
+  // master-list calls hit the SAME server as the altametrics reports
+  // (g1.altametrics.com), so they're chained into that one domain's
+  // sequential run instead of firing as a separate parallel stream —
+  // this avoids double-hitting that single server at once, which was
+  // the main cause of the slow/stuck-looking refresh.
+  const ALTAMETRICS_HOST = 'g1.altametrics.com';
+  const domainTasks = Object.entries(groups).map(([host, cfgs]) => {
+    if (host === ALTAMETRICS_HOST) {
+      return (async () => {
+        await runGroupSequential(cfgs);
+        await new Promise(r => setTimeout(r, 150));
+        await refreshMasterCampaignLists();
+      })();
+    }
+    return runGroupSequential(cfgs);
+  });
+  // If altametrics.com somehow isn't in REPORTS_CONFIG's groups, still fetch the lists
+  if (!groups[ALTAMETRICS_HOST]) domainTasks.push(refreshMasterCampaignLists());
+
+  await Promise.all(domainTasks);
 
   // Fill zero-activity campaign topics from master list (same as old upload flow)
   Object.keys(store.campaign).forEach(jtbd => {
