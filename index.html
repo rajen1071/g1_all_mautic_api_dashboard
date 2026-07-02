@@ -7,22 +7,22 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
-  /* MAUTIC REFRESH OVERLAY */
-  #mauticLoadingOverlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,14,26,0.92);backdrop-filter:blur(4px);z-index:99999;display:none;align-items:center;justify-content:center;}
+  /* MAUTIC REFRESH — floating pill (non-blocking, corner) */
+  #mauticLoadingOverlay{position:fixed;bottom:24px;right:24px;z-index:99999;display:none;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none;}
   #mauticLoadingOverlay.show{display:flex;}
-  .mautic-loading-box{background:#111827;border:1px solid #243350;border-radius:16px;padding:32px 40px;min-width:360px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,0.5);}
-  .mautic-loading-title{font-size:16px;font-weight:700;color:#f1f5f9;display:flex;align-items:center;gap:10px;margin-bottom:6px;}
-  .mautic-spinner{width:18px;height:18px;border:2.5px solid #243350;border-top-color:#3b82f6;border-radius:50%;animation:mauticSpin 0.8s linear infinite;flex-shrink:0;}
+  .mautic-loading-box{background:#111827;border:1px solid #243350;border-radius:12px;padding:14px 18px;min-width:280px;max-width:340px;box-shadow:0 8px 32px rgba(0,0,0,0.6);pointer-events:all;}
+  .mautic-loading-title{font-size:13px;font-weight:700;color:#f1f5f9;display:flex;align-items:center;gap:8px;margin-bottom:4px;}
+  .mautic-spinner{width:14px;height:14px;border:2px solid #243350;border-top-color:#3b82f6;border-radius:50%;animation:mauticSpin 0.8s linear infinite;flex-shrink:0;}
   @keyframes mauticSpin{to{transform:rotate(360deg);}}
-  .mautic-loading-sub{font-size:12px;color:#94a3b8;margin-bottom:16px;}
-  .mautic-progress-track{width:100%;height:8px;background:#1e2d47;border-radius:8px;overflow:hidden;margin-bottom:10px;}
+  .mautic-loading-sub{font-size:11px;color:#94a3b8;margin-bottom:10px;}
+  .mautic-progress-track{width:100%;height:5px;background:#1e2d47;border-radius:8px;overflow:hidden;margin-bottom:6px;}
   .mautic-progress-fill{height:100%;background:linear-gradient(90deg,#3b82f6,#60a5fa);border-radius:8px;width:0%;transition:width 0.3s ease;}
-  .mautic-progress-text{font-size:11px;color:#64748b;text-align:right;}
-  .mautic-report-list{margin-top:14px;max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;}
-  .mautic-report-item{font-size:11px;color:#64748b;display:flex;align-items:center;gap:8px;padding:3px 0;}
+  .mautic-progress-text{font-size:10px;color:#64748b;text-align:right;margin-bottom:6px;}
+  .mautic-report-list{max-height:120px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;}
+  .mautic-report-item{font-size:10px;color:#64748b;display:flex;align-items:center;gap:6px;padding:2px 0;}
   .mautic-report-item.done{color:#34d399;}
   .mautic-report-item.failed{color:#f87171;}
-  .mautic-report-item .dot{width:6px;height:6px;border-radius:50%;background:#243350;flex-shrink:0;}
+  .mautic-report-item .dot{width:5px;height:5px;border-radius:50%;background:#243350;flex-shrink:0;}
   .mautic-report-item.done .dot{background:#34d399;}
   .mautic-report-item.failed .dot{background:#f87171;}
   .mautic-report-item.pending .dot{background:#3b82f6;animation:mauticPulse 1s ease-in-out infinite;}
@@ -679,7 +679,9 @@ function aggregateRawCampaignRows(rawRows) {
       order.push(cid);
     }
     const g = groups[cid];
-    g.sentCount++;
+    // Use sent_count field if > 1 (API may return it); otherwise count each row as 1 send
+    const rowSentCount = parseNum(r['sent count'] || r['sent_count'] || '1');
+    g.sentCount += (rowSentCount > 0 ? rowSentCount : 1);
     if (email && isRead) g.readEmails.add(email);
     if (email && clicks > 0) g.clickEmails.add(email);
   });
@@ -2163,6 +2165,10 @@ async function refreshFromMautic() {
       } else if (cfg.kind === 'campaign') {
         const raw = aggregateRawCampaignRows(rawRows);
         store.campaign[cfg.target] = raw; // single source per target — safe overwrite
+        // Merge zero-activity topics immediately so progressive render is complete
+        if (Object.keys(DYNAMIC_MASTER_CAMPAIGNS[cfg.target] || {}).length > 0) {
+          store.campaign[cfg.target] = mergeWithMasterList(cfg.target, store.campaign[cfg.target]);
+        }
       }
 
       results.push({ label: cfg.label, ok: true, count: rawRows.length });
