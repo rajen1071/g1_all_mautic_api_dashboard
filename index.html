@@ -679,9 +679,11 @@ function aggregateRawCampaignRows(rawRows) {
       order.push(cid);
     }
     const g = groups[cid];
-    // Use sent_count field if > 1 (API may return it); otherwise count each row as 1 send
-    const rowSentCount = parseNum(r['sent count'] || r['sent_count'] || '1');
-    g.sentCount += (rowSentCount > 0 ? rowSentCount : 1);
+    // Each row = 1 contact send. DO NOT use the 'sent count' column here —
+    // that field holds the total blast size (same number repeated for every
+    // contact in that blast), so summing it would multiply blast-size × contacts
+    // and produce a wildly inflated total (e.g. 1,284,480,000 instead of 15,038).
+    g.sentCount += 1;
     if (email && isRead) g.readEmails.add(email);
     if (email && clicks > 0) g.clickEmails.add(email);
   });
