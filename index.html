@@ -2230,6 +2230,7 @@ async function refreshFromMautic() {
     store.campaign[jtbd] = mergeWithMasterList(jtbd, store.campaign[jtbd]);
   });
 
+  
   updateBadges();
   refreshAll();
   saveCacheToLocalStorage(); // persist so a browser refresh doesn't lose the data
