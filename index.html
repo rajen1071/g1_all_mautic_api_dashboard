@@ -720,7 +720,10 @@ function isRawCampaignHeaders(hSet) {
 // Used so that topics with ZERO activity in the uploaded file (or topics that
 // never appear at all in a given upload) still show up in the dashboard with 0s,
 // instead of silently disappearing.
-// Dynamic master campaign list (replaces old hardcoded MASTER_CAMPAIGNS).
+// JTBDs that have their own dedicated simple report in REPORTS_CONFIG.
+// simple-multi (ALL-JTBD) will NOT overwrite these — they get their data
+// from the dedicated fetch, not from the catch-all report.
+const DEDICATED_SIMPLE_JTBDS = new Set(['music', 'payroll', 'accounting', 'catering']);
 // Populated fresh on every refresh by querying Mautic's /api/campaigns,
 // so zero-activity topics still show up without us hand-maintaining IDs.
 let DYNAMIC_MASTER_CAMPAIGNS = { music: {}, payroll: {}, plumpos: {} };
@@ -729,9 +732,9 @@ let DYNAMIC_MASTER_CAMPAIGNS = { music: {}, payroll: {}, plumpos: {} };
 // campaign belongs to (mirrors the same "= Topic | Email | Music" naming
 // convention your campaigns already use — same logic zeroCampRow() below uses)
 const JTBD_CAMPAIGN_LOOKUP = {
-  music:   { searchTerm: 'Music',   suffixRe: /\|\s*Music\s*$/i },
-  payroll: { searchTerm: 'Payroll', suffixRe: /\|\s*Payroll\s*$/i },
-  plumpos: { searchTerm: 'Plum',    suffixRe: /\|\s*Plum\s*$/i }
+  music:   { searchTerm: 'Bombora', suffixRe: /\|\s*Music\s*$/i },
+  payroll: { searchTerm: 'Bombora', suffixRe: /\|\s*Payroll\s*$/i },
+  plumpos: { searchTerm: 'Bombora', suffixRe: /\|\s*Plum\s*$/i }
 };
 
 // Fetches the full campaign list for one JTBD bucket from Mautic and filters
@@ -752,18 +755,29 @@ async function fetchCampaignMasterList(jtbd) {
   return master;
 }
 
-// Refreshes DYNAMIC_MASTER_CAMPAIGNS for all 3 JTBD buckets (sequential —
-// same Mautic domain — small delay between calls to avoid rate-limiting)
+// Refreshes DYNAMIC_MASTER_CAMPAIGNS — single API call for all Bombora campaigns,
+// then splits into music/payroll/plumpos buckets by name suffix.
 async function refreshMasterCampaignLists() {
-  const jtbds = Object.keys(JTBD_CAMPAIGN_LOOKUP);
-  for (let i = 0; i < jtbds.length; i++) {
-    try {
-      DYNAMIC_MASTER_CAMPAIGNS[jtbds[i]] = await fetchCampaignMasterList(jtbds[i]);
-    } catch (err) {
-      console.warn(`Master campaign list fetch failed for ${jtbds[i]}:`, err.message);
-      // Keep whatever was loaded last time rather than wiping it out on a transient error
-    }
-    if (i < jtbds.length - 1) await new Promise(r => setTimeout(r, 150));
+  try {
+    const url = `https://g1.altametrics.com/api/campaigns?search=${encodeURIComponent('Bombora')}&limit=500`;
+    const resp = await fetch(proxied(url), { method: 'GET' });
+    if (!resp.ok) throw new Error(`Campaign list fetch failed (HTTP ${resp.status})`);
+    const json = await resp.json();
+    const campaigns = json.campaigns || {};
+    // Reset buckets
+    DYNAMIC_MASTER_CAMPAIGNS = { music: {}, payroll: {}, plumpos: {} };
+    Object.values(campaigns).forEach(c => {
+      const name = (c && c.name) || '';
+      const id = String(c.id);
+      for (const [jtbd, cfg] of Object.entries(JTBD_CAMPAIGN_LOOKUP)) {
+        if (cfg.suffixRe.test(name)) {
+          DYNAMIC_MASTER_CAMPAIGNS[jtbd][id] = name;
+          break;
+        }
+      }
+    });
+  } catch (err) {
+    console.warn('Master campaign list fetch failed:', err.message);
   }
 }
 
@@ -1135,7 +1149,7 @@ function updateBadges() {
     store.campaign.music.length + store.campaign.payroll.length + store.campaign.plumpos.length;
   document.getElementById('data-badge').textContent = t ? `${t} Records` : 'No Data';
   document.getElementById('upload-date-badge').textContent =
-    'Uploaded: ' + new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+    'Refreshed: ' + new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
 }
 
 // ─── DATE RANGE FILTER ───
@@ -2115,12 +2129,8 @@ async function refreshFromMautic() {
   // here anymore. Old data stays on screen until each report's NEW data actually
   // arrives and replaces it — so a slow/failed fetch never blanks the dashboard.
   // Each report kind below overwrites only its own bucket once its fetch succeeds.
-  const touchedSimpleMultiJtbds = new Set(); // tracks which buckets simple-multi has already reset this run
-
-  // Group reports by hostname: same server -> fetched sequentially (with a
-  // small delay) to avoid rate-limiting; different servers -> run in parallel,
-  // which is what actually speeds things up since most of your reports live
-  // on five different domains.
+  // Group reports by hostname: same server -> fetched sequentially,
+  // different servers -> run in parallel for speed.
   const groups = {};
   REPORTS_CONFIG.forEach(cfg => {
     const host = new URL(cfg.url).hostname;
@@ -2136,7 +2146,7 @@ async function refreshFromMautic() {
       const rawRows = csvText ? parseCSV(csvText) : [];
 
       if (cfg.kind === 'simple') {
-        store.simple[cfg.target] = rawRows.map(normalizeRow); // single source per bucket — safe overwrite
+        store.simple[cfg.target] = rawRows.map(normalizeRow);
 
       } else if (cfg.kind === 'simple-multi') {
         const rows = rawRows.map(normalizeRow);
@@ -2152,11 +2162,12 @@ async function refreshFromMautic() {
             }
           }
         });
-        // Replace (not append) each bucket exactly once with this run's matches —
-        // prevents duplicate rows piling up if you click Refresh multiple times
         Object.entries(byJtbd).forEach(([jtbd, jRows]) => {
-          store.simple[jtbd] = jRows;
-          touchedSimpleMultiJtbds.add(jtbd);
+          // Skip JTBDs that have dedicated simple reports — those already
+          // populate this bucket from their own fetch; don't overwrite them.
+          if (!DEDICATED_SIMPLE_JTBDS.has(jtbd)) {
+            store.simple[jtbd] = jRows;
+          }
         });
 
       } else if (cfg.kind === 'zoominfo') {
