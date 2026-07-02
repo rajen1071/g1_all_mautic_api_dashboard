@@ -1994,6 +1994,14 @@ const REPORTS_CONFIG = [
     url: 'https://g1.plumaccounting.com/api/reports/6',
     labels: { e_name:'Name', sent_count:'Sent Count', read_count:'Read Count', read_ratio:'Read Ratio', unique_hits:'Unique Clicks', unique_ratio:'Unique Clicks Ratio' } },
 
+  { key: 'zoominfo', kind: 'zoominfo', label: 'ZoomInfo Email Sent Report',
+    url: 'https://g1.altametrics.com/api/reports/46',
+    labels: { e_name:'Name', sent_count:'Sent Count', read_count:'Read Count', read_ratio:'Read Ratio', unique_hits:'Unique Clicks', unique_ratio:'Unique Clicks Ratio' } },
+
+  { key: 'all_jtbd', kind: 'simple-multi', label: 'ALL - JTBD - Email Sent Report',
+    url: 'https://g1.altametrics.com/api/reports/51',
+    labels: { e_name:'Name', sent_count:'Sent Count', read_count:'Read Count', read_ratio:'Read Ratio', unique_hits:'Unique Clicks', unique_ratio:'Unique Clicks Ratio' } },
+
   { key: 'music_campaign', kind: 'campaign', target: 'music', label: 'Bombora | Intent Analytics | Campaign Email Statistics',
     url: 'https://g1.altametrics.com/api/reports/88',
     labels: { name:'Campaign', campaign_id:'Campaign ID', e_name:'Name', email:'Contact Contact Primary Email', sent_count:'Sent Count', is_read:'Read', unique_hits:'Unique Clicks', date_sent:'Date Sent' },
@@ -2007,15 +2015,7 @@ const REPORTS_CONFIG = [
   { key: 'plumpos_campaign', kind: 'campaign', target: 'plumpos', label: 'Bombora | ZoomInfo | Plum | Campaign Email Statistics',
     url: 'https://g1.altametrics.com/api/reports/86',
     labels: { name:'Campaign', campaign_id:'Campaign ID', e_name:'Name', email:'Contact Contact Primary Email', sent_count:'Sent Count', is_read:'Read', unique_hits:'Unique Clicks', date_sent:'Date Sent' },
-    rowTransform: r => ({ ...r, is_read: (r.is_read === '1' || r.is_read === 1) ? 'Yes' : 'No' }) },
-
-  { key: 'zoominfo', kind: 'zoominfo', label: 'ZoomInfo Email Sent Report',
-    url: 'https://g1.altametrics.com/api/reports/46',
-    labels: { e_name:'Name', sent_count:'Sent Count', read_count:'Read Count', read_ratio:'Read Ratio', unique_hits:'Unique Clicks', unique_ratio:'Unique Clicks Ratio' } },
-
-  { key: 'all_jtbd', kind: 'simple-multi', label: 'ALL - JTBD - Email Sent Report',
-    url: 'https://g1.altametrics.com/api/reports/51',
-    labels: { e_name:'Name', sent_count:'Sent Count', read_count:'Read Count', read_ratio:'Read Ratio', unique_hits:'Unique Clicks', unique_ratio:'Unique Clicks Ratio' } }
+    rowTransform: r => ({ ...r, is_read: (r.is_read === '1' || r.is_read === 1) ? 'Yes' : 'No' }) }
 ];
 
 // Convert a Mautic API JSON page-set ({ data: [...] }) into CSV text using the
