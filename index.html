@@ -1,4 +1,4 @@
-`<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -2175,11 +2175,7 @@ async function refreshFromMautic() {
 
       } else if (cfg.kind === 'campaign') {
         const raw = aggregateRawCampaignRows(rawRows);
-        store.campaign[cfg.target] = raw; // single source per target — safe overwrite
-        // Merge zero-activity topics immediately so progressive render is complete
-        if (Object.keys(DYNAMIC_MASTER_CAMPAIGNS[cfg.target] || {}).length > 0) {
-          store.campaign[cfg.target] = mergeWithMasterList(cfg.target, store.campaign[cfg.target]);
-        }
+        store.campaign[cfg.target] = raw; // store raw aggregated data; master-list merge happens at end after refreshMasterCampaignLists() completes
       }
 
       results.push({ label: cfg.label, ok: true, count: rawRows.length });
@@ -2257,7 +2253,7 @@ async function refreshFromMautic() {
 }
 
 // ─── LOCAL CACHE (so a browser refresh / F5 doesn't lose the dashboard) ───
-const CACHE_KEY = 'mauticDashboardCache_v1';
+const CACHE_KEY = 'mauticDashboardCache_v3';
 
 function saveCacheToLocalStorage() {
   try {
