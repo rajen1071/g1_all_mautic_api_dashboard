@@ -664,48 +664,58 @@ function parsePct(v){ return parseFloat((v||'0').toString().replace('%',''))||0;
 //   uniqueReads  = distinct contact emails with Read = Yes
 //   uniqueClicks = distinct contact emails with Unique clicks > 0
 function aggregateRawCampaignRows(rawRows) {
-  const groups = {}; // campaignId -> { name, sentCount, readEmails:Set, clickEmails:Set }
-  const order = [];
+  // Calculation matches PHP logic exactly:
+  //   total_sent    → count++ per row (each row = 1 contact send)
+  //   unique_reads  → count rows where is_read === 1  (integer, not email-set)
+  //   unique_clicks → SUM of unique_hits field per row (not email-set)
+  const groups = {};
+  const order  = [];
+
   rawRows.forEach(r => {
-    const cid = (r['campaign id'] || r['campaign_id'] || '').toString().trim();
+    const cid   = (r['campaign id'] || r['campaign_id'] || '').toString().trim();
     if (!cid) return;
-    const cname = (r['campaign'] || r['campaign_name'] || '').toString().trim();
-    const email = (r['contact contact primary email'] || r['contact primary email'] || '').toString().trim().toLowerCase();
-    const isRead = (r['read'] || '').toString().trim().toLowerCase() === 'yes';
-    const clicks = parseNum(r['unique clicks'] || r['unique_clicks']);
+    const cname = (r['campaign'] || r['campaign_name'] || r['name'] || '').toString().trim();
+
+    // is_read: API returns integer 0/1 (raw JSON) OR 'Yes'/'No' (after CSV roundtrip)
+    const isReadRaw = r['is_read'] !== undefined ? r['is_read'] : r['read'];
+    const isRead = isReadRaw === 1 || isReadRaw === '1'
+                   || (typeof isReadRaw === 'string' && isReadRaw.trim().toLowerCase() === 'yes');
+
+    // unique_hits: API field name (raw JSON) OR 'unique clicks' after CSV roundtrip
+    const hits = parseNum(r['unique_hits'] !== undefined
+      ? r['unique_hits']
+      : (r['unique clicks'] || r['unique_clicks'] || 0));
 
     if (!groups[cid]) {
-      groups[cid] = { name: cname, sentCount: 0, readEmails: new Set(), clickEmails: new Set() };
+      groups[cid] = { name: cname, sentCount: 0, readCount: 0, clickCount: 0 };
       order.push(cid);
     }
     const g = groups[cid];
-    // Each row = 1 contact send. DO NOT use the 'sent count' column here —
-    // that field holds the total blast size (same number repeated for every
-    // contact in that blast), so summing it would multiply blast-size × contacts
-    // and produce a wildly inflated total (e.g. 1,284,480,000 instead of 15,038).
-    g.sentCount += 1;
-    if (email && isRead) g.readEmails.add(email);
-    if (email && clicks > 0) g.clickEmails.add(email);
+    g.sentCount++;                        // PHP: $campaigns[$topicName]['total_sent']++
+    if (isRead) g.readCount++;            // PHP: if ((int)$row['is_read'] === 1) unique_reads++
+    g.clickCount += hits;                 // PHP: unique_clicks += (int)$row['unique_hits']
   });
 
   return order.map(cid => {
-    const g = groups[cid];
+    const g        = groups[cid];
     const campName = g.name;
-    const m = campName.match(/=\s*(.+?)\s*\|\s*Email/i);
+    // Extract topic name: works for all 3 campaign types
+    // "Intent Analytics = TopicName | Email" / "ZoomInfo | ... = TopicName | Email"
+    const m        = campName.match(/=\s*(.+?)\s*\|\s*Email/i);
     const topicName = m ? m[1].trim() : campName;
-    const totalSent = g.sentCount;
-    const uniqueReads = g.readEmails.size;
-    const uniqueClicks = g.clickEmails.size;
+    const totalSent    = g.sentCount;
+    const uniqueReads  = g.readCount;
+    const uniqueClicks = g.clickCount;
     return {
       campaignName: campName,
-      campaignId: cid,
+      campaignId:   cid,
       topicName,
       totalSent,
       uniqueReads,
       uniqueClicks,
       sendDate: '',
-      openRate: totalSent > 0 ? parseFloat((uniqueReads  / totalSent * 100).toFixed(1)) : 0,
-      clickPct: totalSent > 0 ? parseFloat((uniqueClicks / totalSent * 100).toFixed(1)) : 0
+      openRate:  totalSent > 0 ? parseFloat((uniqueReads  / totalSent * 100).toFixed(2)) : 0,
+      clickPct:  totalSent > 0 ? parseFloat((uniqueClicks / totalSent * 100).toFixed(2)) : 0
     };
   });
 }
