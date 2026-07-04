@@ -664,56 +664,54 @@ function parsePct(v){ return parseFloat((v||'0').toString().replace('%',''))||0;
 //   uniqueReads  = distinct contact emails with Read = Yes
 //   uniqueClicks = distinct contact emails with Unique clicks > 0
 function aggregateRawCampaignRows(rawRows) {
-  // Calculation matches PHP logic exactly:
+  // PHP-identical calculation:
   //   total_sent    → count++ per row (each row = 1 contact send)
-  //   unique_reads  → count rows where is_read === 1  (integer, not email-set)
-  //   unique_clicks → SUM of unique_hits field per row (not email-set)
+  //   unique_reads  → count rows where is_read === 1
+  //   unique_clicks → SUM of unique_hits per row
+  // Match is done by EXACT campaign name (hardcoded master list names).
   const groups = {};
   const order  = [];
 
   rawRows.forEach(r => {
-    const cid   = (r['campaign id'] || r['campaign_id'] || '').toString().trim();
-    if (!cid) return;
-    const cname = (r['campaign'] || r['campaign_name'] || r['name'] || '').toString().trim();
+    // API returns 'name' field = exact full campaign name string
+    const campName = (r['name'] || r['campaign'] || r['campaign_name'] || '').toString().trim();
+    if (!campName) return;
 
-    // is_read: API returns integer 0/1 (raw JSON) OR 'Yes'/'No' (after CSV roundtrip)
+    // is_read: integer 0/1 from API (raw JSON)
     const isReadRaw = r['is_read'] !== undefined ? r['is_read'] : r['read'];
     const isRead = isReadRaw === 1 || isReadRaw === '1'
                    || (typeof isReadRaw === 'string' && isReadRaw.trim().toLowerCase() === 'yes');
 
-    // unique_hits: API field name (raw JSON) OR 'unique clicks' after CSV roundtrip
-    const hits = parseNum(r['unique_hits'] !== undefined
-      ? r['unique_hits']
-      : (r['unique clicks'] || r['unique_clicks'] || 0));
+    // unique_hits: clicks from API (raw JSON)
+    const hits = parseNum(
+      r['unique_hits'] !== undefined ? r['unique_hits'] :
+      (r['unique clicks'] || r['unique_clicks'] || 0)
+    );
 
-    if (!groups[cid]) {
-      groups[cid] = { name: cname, sentCount: 0, readCount: 0, clickCount: 0 };
-      order.push(cid);
+    if (!groups[campName]) {
+      groups[campName] = { sentCount: 0, readCount: 0, clickCount: 0 };
+      order.push(campName);
     }
-    const g = groups[cid];
-    g.sentCount++;                        // PHP: $campaigns[$topicName]['total_sent']++
-    if (isRead) g.readCount++;            // PHP: if ((int)$row['is_read'] === 1) unique_reads++
-    g.clickCount += hits;                 // PHP: unique_clicks += (int)$row['unique_hits']
+    const g = groups[campName];
+    g.sentCount++;                 // PHP: total_sent++
+    if (isRead) g.readCount++;     // PHP: if is_read === 1
+    g.clickCount += hits;          // PHP: unique_clicks += unique_hits
   });
 
-  return order.map(cid => {
-    const g        = groups[cid];
-    const campName = g.name;
-    // Extract topic name: works for all 3 campaign types
-    // "Intent Analytics = TopicName | Email" / "ZoomInfo | ... = TopicName | Email"
-    const m        = campName.match(/=\s*(.+?)\s*\|\s*Email/i);
-    const topicName = m ? m[1].trim() : campName;
+  return order.map(campName => {
+    const g            = groups[campName];
+    const topicName    = extractTopicName(campName);
     const totalSent    = g.sentCount;
     const uniqueReads  = g.readCount;
     const uniqueClicks = g.clickCount;
     return {
       campaignName: campName,
-      campaignId:   cid,
+      campaignId:   '',
       topicName,
       totalSent,
       uniqueReads,
       uniqueClicks,
-      sendDate: '',
+      sendDate:  '',
       openRate:  totalSent > 0 ? parseFloat((uniqueReads  / totalSent * 100).toFixed(2)) : 0,
       clickPct:  totalSent > 0 ? parseFloat((uniqueClicks / totalSent * 100).toFixed(2)) : 0
     };
@@ -735,89 +733,89 @@ function isRawCampaignHeaders(hSet) {
 // JTBDs that have their own dedicated simple report in REPORTS_CONFIG.
 // simple-multi (ALL-JTBD) will NOT overwrite these — they get their data
 // from the dedicated fetch, not from the catch-all report.
-const DEDICATED_SIMPLE_JTBDS = new Set(['music', 'payroll', 'accounting', 'catering']);
-// Populated fresh on every refresh by querying Mautic's /api/campaigns,
-// so zero-activity topics still show up without us hand-maintaining IDs.
-let DYNAMIC_MASTER_CAMPAIGNS = { music: {}, payroll: {}, plumpos: {} };
-
-// search term + name-suffix pattern used to identify which JTBD bucket a
-// campaign belongs to (mirrors the same "= Topic | Email | Music" naming
-// convention your campaigns already use — same logic zeroCampRow() below uses)
-const JTBD_CAMPAIGN_LOOKUP = {
-  music:   { searchTerm: 'Bombora', suffixRe: /\|\s*Music\s*$/i },
-  payroll: { searchTerm: 'Bombora', suffixRe: /\|\s*Payroll\s*$/i },
-  plumpos: { searchTerm: 'Bombora', suffixRe: /\|\s*Plum\s*$/i }
+// ─── HARDCODED MASTER CAMPAIGN LISTS ───
+// Exact campaign names as they appear in the API 'name' field.
+// Key = display topic name, Value = exact API name string.
+// aggregateRawCampaignRows() matches rows by exact 'name' field.
+const MASTER_CAMPAIGNS = {
+  music: [
+    '25207 Bombora | Intent Analytics = Apple Music for Business | Email |Music',
+    '25207 Bombora | Intent Analytics = Bar Music System | Email |Music',
+    '25207 Bombora | Intent Analytics = Background Music for Hotel | Email |Music',
+    '25207 Bombora | Intent Analytics = In-Store Music | Email |Music',
+    '25207 Bombora | Intent Analytics = Stingray | Email |Music',
+    '25207 Bombora | Intent Analytics = Rockbot | Email |Music',
+    '25207 Bombora | Intent Analytics = Pandora for Business | Email |Music',
+    '25207 Bombora | Intent Analytics = Spotify Business | Email |Music',
+    '25207 Bombora | Intent Analytics = PlayNetwork | Email |Music',
+    '25207 Bombora | Intent Analytics = Music for Restaurants| Email |Music',
+    '25207 Bombora | Intent Analytics = Music for Coffee Shops | Email |Music',
+    '25207 Bombora | Intent Analytics = Background Music for Business | Email |Music',
+  ],
+  payroll: [
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Payroll | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Paychecks | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Automated Payroll | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Payroll Software | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Payroll Management | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Paychex | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Paycor | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Payroll Management Software | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = Payroll Services | Email | Payroll',
+    '25207 Bombora - ZoomInfo | Buying Intent - Intent Topics = QuickBooks | Email | Payroll',
+  ],
+  plumpos: [
+    '25201 Bombora - ZoomInfo | Buying Intent - Intent Topics = Mobile Point of Sale (mPOS) | Email | Plum',
+    '25201 Bombora - ZoomInfo | Buying Intent - Intent Topics = Clover | Email | Plum',
+    '25201 Bombora - ZoomInfo | Buying Intent - Intent Topics = Kiosks | Email | Plum',
+    '25201 Bombora - ZoomInfo | Buying Intent - Intent Topics = Point of Purchase Displays | Email | Plum',
+    '25201 Bombora - ZoomInfo | Buying Intent - Intent Topics = Payment Terminal | Email | Plum',
+    '25201 Bombora - ZoomInfo | Buying Intent - Intent Topics = Point of Sale (POS) System | Email | Plum',
+    '25201 Bombora - ZoomInfo | Buying Intent - Intent Topics = Square | Email | Plum',
+  ]
 };
 
-// Fetches the full campaign list for one JTBD bucket from Mautic and filters
-// it down to campaigns matching that bucket's naming pattern.
-async function fetchCampaignMasterList(jtbd) {
-  const cfg = JTBD_CAMPAIGN_LOOKUP[jtbd];
-  if (!cfg) return {};
-  const url = `https://g1.altametrics.com/api/campaigns?search=${encodeURIComponent(cfg.searchTerm)}&limit=200`;
-  const resp = await fetch(proxied(url), { method: 'GET' });
-  if (!resp.ok) throw new Error(`Campaign list fetch failed (HTTP ${resp.status}) for ${jtbd}`);
-  const json = await resp.json();
-  const campaigns = json.campaigns || {};
-  const master = {};
-  Object.values(campaigns).forEach(c => {
-    const name = (c && c.name) || '';
-    if (cfg.suffixRe.test(name)) master[String(c.id)] = name;
-  });
-  return master;
+// Extract topic name from full campaign name
+function extractTopicName(campName) {
+  const m = campName.match(/=\s*(.+?)\s*\|\s*Email/i);
+  return m ? m[1].trim() : campName;
 }
 
-// Refreshes DYNAMIC_MASTER_CAMPAIGNS — single API call for all Bombora campaigns,
-// then splits into music/payroll/plumpos buckets by name suffix.
-async function refreshMasterCampaignLists() {
-  try {
-    const url = `https://g1.altametrics.com/api/campaigns?search=${encodeURIComponent('Bombora')}&limit=500`;
-    const resp = await fetch(proxied(url), { method: 'GET' });
-    if (!resp.ok) throw new Error(`Campaign list fetch failed (HTTP ${resp.status})`);
-    const json = await resp.json();
-    const campaigns = json.campaigns || {};
-    // Reset buckets
-    DYNAMIC_MASTER_CAMPAIGNS = { music: {}, payroll: {}, plumpos: {} };
-    Object.values(campaigns).forEach(c => {
-      const name = (c && c.name) || '';
-      const id = String(c.id);
-      for (const [jtbd, cfg] of Object.entries(JTBD_CAMPAIGN_LOOKUP)) {
-        if (cfg.suffixRe.test(name)) {
-          DYNAMIC_MASTER_CAMPAIGNS[jtbd][id] = name;
-          break;
-        }
-      }
-    });
-  } catch (err) {
-    console.warn('Master campaign list fetch failed:', err.message);
-  }
-}
-
-// Builds a normalizeCampRow-shaped row with all zeros for a master-list entry
+// Build zero row for a campaign name
 function zeroCampRow(campaignName) {
-  const m = campaignName.match(/=\s*(.+?)\s*\|\s*Email/i);
-  const topicName = m ? m[1].trim() : campaignName;
-  return { campaignName, topicName, totalSent: 0, uniqueReads: 0, uniqueClicks: 0, sendDate: '', openRate: 0, clickPct: 0 };
+  const topicName = extractTopicName(campaignName);
+  return { campaignName, topicName, campaignId: '', totalSent: 0, uniqueReads: 0, uniqueClicks: 0, sendDate: '', openRate: 0, clickPct: 0 };
 }
 
-// Merges aggregated/uploaded campaign rows with the master list for that JTBD,
-// so missing/zero-activity topics still appear in the dashboard.
+// Merges aggregated rows with hardcoded master list.
+// Any campaign not present in API data appears with all zeros.
 function mergeWithMasterList(jtbd, rows) {
-  const master = DYNAMIC_MASTER_CAMPAIGNS[jtbd];
-  if (!master || !Object.keys(master).length) return rows; // no master list loaded for this JTBD — return as-is
-
-  const usedIds = new Set(rows.map(r => r.campaignId).filter(Boolean));
-  const usedNames = new Set(rows.map(r => r.campaignName));
+  const masterNames = MASTER_CAMPAIGNS[jtbd];
+  if (!masterNames) return rows;
+  const usedNames = new Set(rows.map(r => r.campaignName.trim()));
   const merged = rows.slice();
-  Object.entries(master).forEach(([cid, name]) => {
-    if (usedIds.has(cid)) return;       // matched by id
-    if (!usedIds.size && usedNames.has(name)) return; // fallback: matched by exact name (no ids at all in upload)
-    const zr = zeroCampRow(name);
-    zr.campaignId = cid;
-    merged.push(zr);
+  masterNames.forEach(name => {
+    if (!usedNames.has(name.trim())) {
+      merged.push(zeroCampRow(name));
+    }
+  });
+  // Sort by master list order
+  const masterOrder = {};
+  masterNames.forEach((n, i) => { masterOrder[n.trim()] = i; });
+  merged.sort((a, b) => {
+    const ai = masterOrder[a.campaignName.trim()];
+    const bi = masterOrder[b.campaignName.trim()];
+    if (ai !== undefined && bi !== undefined) return ai - bi;
+    if (ai !== undefined) return -1;
+    if (bi !== undefined) return 1;
+    return 0;
   });
   return merged;
 }
+
+// No-op stubs (kept so rest of code that calls these doesn't break)
+let DYNAMIC_MASTER_CAMPAIGNS = { music: {}, payroll: {}, plumpos: {} };
+async function refreshMasterCampaignLists() { /* campaigns now hardcoded */ }
 
 // ─── FILE → ROWS PARSER (CSV + XLSX) ───
 function parseFileToRows(file, callback) {
