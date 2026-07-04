@@ -663,29 +663,49 @@ function parsePct(v){ return parseFloat((v||'0').toString().replace('%',''))||0;
 //   totalSent    = number of send rows for that campaign
 //   uniqueReads  = distinct contact emails with Read = Yes
 //   uniqueClicks = distinct contact emails with Unique clicks > 0
+// Scans ALL fields of an API row to find one that contains the campaign name
+// pattern "= TopicName | Email". This handles any field name the API may use
+// (name, campaign_name, e_name, c_name, etc.) without assuming a specific field.
+function findCampaignNameInRow(row) {
+  const CAMP_PATTERN = /=\s*.+?\s*\|\s*Email/i;
+  // Priority order: most likely field names first
+  const priorityFields = ['campaign_name', 'campaign', 'c_name', 'name', 'e_name'];
+  for (const f of priorityFields) {
+    const v = (row[f] || '').toString().trim();
+    if (CAMP_PATTERN.test(v)) return v;
+  }
+  // Fallback: scan every string field in the row
+  for (const v of Object.values(row)) {
+    if (typeof v === 'string' && CAMP_PATTERN.test(v)) return v.trim();
+  }
+  return ''; // not a campaign row — will be skipped
+}
+
 function aggregateRawCampaignRows(rawRows) {
-  // PHP-identical calculation:
-  //   total_sent    → count++ per row (each row = 1 contact send)
+  // Exact PHP/JS logic provided by user:
+  //   total_sent    → count++ per row
   //   unique_reads  → count rows where is_read === 1
   //   unique_clicks → SUM of unique_hits per row
-  // Match is done by EXACT campaign name (hardcoded master list names).
+  //
+  // Rows that don't belong to any known campaign (e.g. email-level rows like
+  // "25207-00001 | Music | Intent Analytics | EMM") are SKIPPED automatically
+  // because findCampaignNameInRow() returns '' for them.
   const groups = {};
   const order  = [];
 
-  rawRows.forEach(r => {
-    // API returns 'name' field = exact full campaign name string
-    const campName = (r['name'] || r['campaign'] || r['campaign_name'] || '').toString().trim();
-    if (!campName) return;
+  rawRows.forEach(row => {
+    const campName = findCampaignNameInRow(row);
+    if (!campName) return; // skip — not a campaign row
 
-    // is_read: integer 0/1 from API (raw JSON)
-    const isReadRaw = r['is_read'] !== undefined ? r['is_read'] : r['read'];
+    // is_read: integer 0/1 from API
+    const isReadRaw = row['is_read'] !== undefined ? row['is_read'] : row['read'];
     const isRead = isReadRaw === 1 || isReadRaw === '1'
-                   || (typeof isReadRaw === 'string' && isReadRaw.trim().toLowerCase() === 'yes');
+                || (typeof isReadRaw === 'string' && isReadRaw.trim().toLowerCase() === 'yes');
 
-    // unique_hits: clicks from API (raw JSON)
+    // unique_hits: clicks (sum per PHP logic)
     const hits = parseNum(
-      r['unique_hits'] !== undefined ? r['unique_hits'] :
-      (r['unique clicks'] || r['unique_clicks'] || 0)
+      row['unique_hits'] !== undefined ? row['unique_hits'] :
+      (row['unique clicks'] || row['unique_clicks'] || 0)
     );
 
     if (!groups[campName]) {
@@ -693,14 +713,15 @@ function aggregateRawCampaignRows(rawRows) {
       order.push(campName);
     }
     const g = groups[campName];
-    g.sentCount++;                 // PHP: total_sent++
-    if (isRead) g.readCount++;     // PHP: if is_read === 1
-    g.clickCount += hits;          // PHP: unique_clicks += unique_hits
+    g.sentCount++;              // PHP: total_sent++
+    if (isRead) g.readCount++;  // PHP: is_read === 1
+    g.clickCount += hits;       // PHP: unique_clicks += unique_hits
   });
 
   return order.map(campName => {
     const g            = groups[campName];
-    const topicName    = extractTopicName(campName);
+    const m            = campName.match(/=\s*(.+?)\s*\|\s*Email/i);
+    const topicName    = m ? m[1].trim() : campName;
     const totalSent    = g.sentCount;
     const uniqueReads  = g.readCount;
     const uniqueClicks = g.clickCount;
@@ -725,18 +746,10 @@ function isRawCampaignHeaders(hSet) {
     && hSet.has('read');
 }
 
-// ─── MASTER CAMPAIGN LISTS ───
-// Full set of known campaign topics per JTBD (id -> full campaign name).
-// Used so that topics with ZERO activity in the uploaded file (or topics that
-// never appear at all in a given upload) still show up in the dashboard with 0s,
-// instead of silently disappearing.
-// JTBDs that have their own dedicated simple report in REPORTS_CONFIG.
-// simple-multi (ALL-JTBD) will NOT overwrite these — they get their data
-// from the dedicated fetch, not from the catch-all report.
 // ─── HARDCODED MASTER CAMPAIGN LISTS ───
-// Exact campaign names as they appear in the API 'name' field.
-// Key = display topic name, Value = exact API name string.
-// aggregateRawCampaignRows() matches rows by exact 'name' field.
+// Exact campaign names as they appear in the API response.
+// Page loads with all zeros. After API fetch, matching rows fill in the data.
+// Non-matching rows (email-level like "25207-00001 | Music | Intent Analytics | EMM") are ignored.
 const MASTER_CAMPAIGNS = {
   music: [
     '25207 Bombora | Intent Analytics = Apple Music for Business | Email |Music',
@@ -775,47 +788,48 @@ const MASTER_CAMPAIGNS = {
   ]
 };
 
-// Extract topic name from full campaign name
-function extractTopicName(campName) {
-  const m = campName.match(/=\s*(.+?)\s*\|\s*Email/i);
-  return m ? m[1].trim() : campName;
-}
+// No-op stubs — kept so rest of code doesn't break
+const DEDICATED_SIMPLE_JTBDS = new Set(['music', 'payroll', 'accounting', 'catering']);
+let DYNAMIC_MASTER_CAMPAIGNS = { music: {}, payroll: {}, plumpos: {} };
+async function refreshMasterCampaignLists() { /* campaigns now hardcoded */ }
 
-// Build zero row for a campaign name
 function zeroCampRow(campaignName) {
-  const topicName = extractTopicName(campaignName);
-  return { campaignName, topicName, campaignId: '', totalSent: 0, uniqueReads: 0, uniqueClicks: 0, sendDate: '', openRate: 0, clickPct: 0 };
+  const m = campaignName.match(/=\s*(.+?)\s*\|\s*Email/i);
+  const topicName = m ? m[1].trim() : campaignName;
+  return { campaignName, campaignId: '', topicName, totalSent: 0, uniqueReads: 0, uniqueClicks: 0, sendDate: '', openRate: 0, clickPct: 0 };
 }
 
-// Merges aggregated rows with hardcoded master list.
-// Any campaign not present in API data appears with all zeros.
+// Merges API-aggregated rows with hardcoded master list.
+// Matches by exact campaign name. Unmatched API rows are ignored.
+// Hardcoded campaigns missing from API data show as 0.
 function mergeWithMasterList(jtbd, rows) {
   const masterNames = MASTER_CAMPAIGNS[jtbd];
   if (!masterNames) return rows;
-  const usedNames = new Set(rows.map(r => r.campaignName.trim()));
+  // Build lookup from exact campaign name → aggregated row
+  const byName = {};
+  rows.forEach(r => { byName[r.campaignName.trim()] = r; });
+  // Return master list in order, filled with data or zeros
+  return masterNames.map(name => byName[name.trim()] || zeroCampRow(name));
+}
+
+// Merges aggregated/uploaded campaign rows with the master list for that JTBD,
+// so missing/zero-activity topics still appear in the dashboard.
+function mergeWithMasterList(jtbd, rows) {
+  const master = DYNAMIC_MASTER_CAMPAIGNS[jtbd];
+  if (!master || !Object.keys(master).length) return rows; // no master list loaded for this JTBD — return as-is
+
+  const usedIds = new Set(rows.map(r => r.campaignId).filter(Boolean));
+  const usedNames = new Set(rows.map(r => r.campaignName));
   const merged = rows.slice();
-  masterNames.forEach(name => {
-    if (!usedNames.has(name.trim())) {
-      merged.push(zeroCampRow(name));
-    }
-  });
-  // Sort by master list order
-  const masterOrder = {};
-  masterNames.forEach((n, i) => { masterOrder[n.trim()] = i; });
-  merged.sort((a, b) => {
-    const ai = masterOrder[a.campaignName.trim()];
-    const bi = masterOrder[b.campaignName.trim()];
-    if (ai !== undefined && bi !== undefined) return ai - bi;
-    if (ai !== undefined) return -1;
-    if (bi !== undefined) return 1;
-    return 0;
+  Object.entries(master).forEach(([cid, name]) => {
+    if (usedIds.has(cid)) return;       // matched by id
+    if (!usedIds.size && usedNames.has(name)) return; // fallback: matched by exact name (no ids at all in upload)
+    const zr = zeroCampRow(name);
+    zr.campaignId = cid;
+    merged.push(zr);
   });
   return merged;
 }
-
-// No-op stubs (kept so rest of code that calls these doesn't break)
-let DYNAMIC_MASTER_CAMPAIGNS = { music: {}, payroll: {}, plumpos: {} };
-async function refreshMasterCampaignLists() { /* campaigns now hardcoded */ }
 
 // ─── FILE → ROWS PARSER (CSV + XLSX) ───
 function parseFileToRows(file, callback) {
