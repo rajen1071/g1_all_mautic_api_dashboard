@@ -812,25 +812,6 @@ function mergeWithMasterList(jtbd, rows) {
   return masterNames.map(name => byName[name.trim()] || zeroCampRow(name));
 }
 
-// Merges aggregated/uploaded campaign rows with the master list for that JTBD,
-// so missing/zero-activity topics still appear in the dashboard.
-function mergeWithMasterList(jtbd, rows) {
-  const master = DYNAMIC_MASTER_CAMPAIGNS[jtbd];
-  if (!master || !Object.keys(master).length) return rows; // no master list loaded for this JTBD — return as-is
-
-  const usedIds = new Set(rows.map(r => r.campaignId).filter(Boolean));
-  const usedNames = new Set(rows.map(r => r.campaignName));
-  const merged = rows.slice();
-  Object.entries(master).forEach(([cid, name]) => {
-    if (usedIds.has(cid)) return;       // matched by id
-    if (!usedIds.size && usedNames.has(name)) return; // fallback: matched by exact name (no ids at all in upload)
-    const zr = zeroCampRow(name);
-    zr.campaignId = cid;
-    merged.push(zr);
-  });
-  return merged;
-}
-
 // ─── FILE → ROWS PARSER (CSV + XLSX) ───
 function parseFileToRows(file, callback) {
   const isXLSX = /\.(xlsx|xls)$/i.test(file.name);
