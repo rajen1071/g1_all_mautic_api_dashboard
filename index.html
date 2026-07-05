@@ -2056,29 +2056,26 @@ function getDateRange() {
   return { dateFrom: defaultFrom, dateTo: defaultTo };
 }
 
-// Fetch one report directly from Mautic with pagination, merging every page.
+// Fetch one report directly from Mautic.
+// NOTE: The API's `start` pagination parameter doesn't work reliably —
+// each page returns the same rows from the beginning. So we fetch ALL rows
+// in a single request with a very high limit instead of paginating.
 async function fetchSingleReport(url, dateFrom, dateTo) {
-  let start = 0;
-  let allRows = [];
-  let totalResults = Infinity;
+  // First fetch with limit=1 just to get totalResults count
+  const probeUrl = `${url}?dateFrom=${dateFrom}&dateTo=${dateTo}&limit=1&start=0`;
+  const probeResp = await fetch(proxied(probeUrl), { method: 'GET' });
+  if (!probeResp.ok) throw new Error(`HTTP ${probeResp.status} for ${url}`);
+  const probeJson = await probeResp.json();
+  const totalResults = (probeJson && typeof probeJson.totalResults === 'number')
+    ? probeJson.totalResults : 10000;
 
-  while (start < totalResults) {
-    const pageUrl = `${url}?dateFrom=${dateFrom}&dateTo=${dateTo}&limit=${API_PAGE_SIZE}&start=${start}`;
-    const resp = await fetch(proxied(pageUrl), { method: 'GET' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
-
-    const json = await resp.json();
-    const rows = (json && json.data) ? json.data : [];
-    allRows = allRows.concat(rows);
-    totalResults = (json && typeof json.totalResults === 'number') ? json.totalResults : allRows.length;
-
-    if (rows.length === 0) break; // safety valve against infinite loop
-    start += rows.length;
-
-    // Small pause between pages to avoid hammering Mautic / triggering rate limits
-    if (start < totalResults) await new Promise(r => setTimeout(r, 200));
-  }
-  return allRows;
+  // Now fetch ALL rows in one shot using the known total count
+  const fetchLimit = Math.min(totalResults + 100, 200000); // safety cap at 200k
+  const fullUrl = `${url}?dateFrom=${dateFrom}&dateTo=${dateTo}&limit=${fetchLimit}&start=0`;
+  const resp = await fetch(proxied(fullUrl), { method: 'GET' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
+  const json = await resp.json();
+  return (json && json.data) ? json.data : [];
 }
 
 // Retry wrapper with backoff so one transient network hiccup doesn't blank a report
